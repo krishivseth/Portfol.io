@@ -14,7 +14,7 @@ export class ConversationMemory {
     const path = url.pathname;
 
     if (path === "/add" && request.method === "POST") {
-      const { userId, role, content } = await request.json();
+      const { userId, role, content } = await request.json() as { userId: string; role: "agent" | "user" | "system"; content: string };
       await this.addMessage(userId, role, content);
       return new Response(JSON.stringify({ success: true }), {
         headers: { "Content-Type": "application/json" },
@@ -42,7 +42,7 @@ export class ConversationMemory {
     }
 
     if (path === "/clear" && request.method === "POST") {
-      const { userId } = await request.json();
+      const { userId } = await request.json() as { userId: string };
       await this.clearHistory(userId);
       return new Response(JSON.stringify({ success: true }), {
         headers: { "Content-Type": "application/json" },

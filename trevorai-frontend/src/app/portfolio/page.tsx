@@ -45,9 +45,18 @@ export default function PortfolioPage() {
     const prices: Record<string, number> = {};
     await Promise.all(
       symbols.map(async (symbol) => {
-        const price = await getStockQuote(symbol);
-        if (price !== null) {
-          prices[symbol] = price;
+        try {
+          const price = await getStockQuote(symbol);
+          if (price !== null && !isNaN(price)) {
+            prices[symbol] = price;
+          } else {
+            // Use placeholder price if API fails
+            prices[symbol] = 100;
+          }
+        } catch (error) {
+          console.error(`Error fetching price for ${symbol}:`, error);
+          // Use placeholder price if API fails
+          prices[symbol] = 100;
         }
       })
     );

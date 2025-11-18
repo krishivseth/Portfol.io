@@ -33,7 +33,7 @@ export class AnalysisCache {
     }
 
     if (path === "/cache" && request.method === "POST") {
-      const { symbol, result } = await request.json();
+      const { symbol, result } = await request.json() as { symbol: string; result: StockAnalysisResult };
       await this.setAnalysis(symbol, result);
       return new Response(JSON.stringify({ success: true }), {
         headers: { "Content-Type": "application/json" },
@@ -41,7 +41,7 @@ export class AnalysisCache {
     }
 
     if (path === "/invalidate" && request.method === "POST") {
-      const { symbol } = await request.json();
+      const { symbol } = await request.json() as { symbol?: string };
       if (symbol) {
         await this.invalidate(symbol);
       } else {

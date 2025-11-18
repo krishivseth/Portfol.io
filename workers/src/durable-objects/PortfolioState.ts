@@ -23,7 +23,7 @@ export class PortfolioState {
     }
 
     if (path === "/update" && request.method === "POST") {
-      const { userId, portfolio } = await request.json();
+      const { userId, portfolio } = await request.json() as { userId: string; portfolio: UserPortfolio };
       await this.updatePortfolio(userId, portfolio);
       return new Response(JSON.stringify({ success: true }), {
         headers: { "Content-Type": "application/json" },
@@ -31,7 +31,7 @@ export class PortfolioState {
     }
 
     if (path === "/buy" && request.method === "POST") {
-      const { userId, stockSymbol, quantity, pricePerShare } = await request.json();
+      const { userId, stockSymbol, quantity, pricePerShare } = await request.json() as { userId: string; stockSymbol: string; quantity: number; pricePerShare: number };
       const result = await this.buyStock(userId, stockSymbol, quantity, pricePerShare);
       return new Response(JSON.stringify(result), {
         headers: { "Content-Type": "application/json" },
@@ -39,7 +39,7 @@ export class PortfolioState {
     }
 
     if (path === "/sell" && request.method === "POST") {
-      const { userId, stockSymbol, quantity, pricePerShare } = await request.json();
+      const { userId, stockSymbol, quantity, pricePerShare } = await request.json() as { userId: string; stockSymbol: string; quantity: number; pricePerShare: number };
       const result = await this.sellStock(userId, stockSymbol, quantity, pricePerShare);
       return new Response(JSON.stringify(result), {
         headers: { "Content-Type": "application/json" },

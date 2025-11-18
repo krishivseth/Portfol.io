@@ -8,6 +8,9 @@ import { processVoiceQuery } from "./utils/llmClient";
 import { fetchStockQuote } from "./utils/stockData";
 import { ResponseRequiredRequest, ResponseResponse, TradeRequest, AnalyzeRequest } from "./types";
 
+// Export Durable Objects for Wrangler
+export { PortfolioState, TransactionLog, ConversationMemory, AnalysisCache, WebSocketConnection };
+
 export interface Env {
   PORTFOLIO_STATE: DurableObjectNamespace<PortfolioState>;
   TRANSACTION_LOG: DurableObjectNamespace<TransactionLog>;
@@ -74,6 +77,10 @@ export default {
         return handleWebhook(request, env);
       }
       
+      if (url.pathname === "/api/migrate" && request.method === "POST") {
+        return handleMigrate(request, env);
+      }
+      
       return new Response("Not Found", { status: 404 });
     } catch (error: any) {
       console.error("Error handling request:", error);
@@ -112,16 +119,26 @@ async function handleGetPortfolio(request: Request, env: Env): Promise<Response>
 
 // Get user portfolio
 async function handleGetUserPortfolio(userId: string, env: Env): Promise<Response> {
-  const id = env.PORTFOLIO_STATE.idFromName(userId);
-  const stub = env.PORTFOLIO_STATE.get(id);
-  const response = await stub.fetch(`http://internal/get?userId=${userId}`);
-  const portfolio = await response.json();
-  
-  if (!portfolio) {
-    return jsonResponse({ error: "User not found" }, 404);
+  try {
+    const id = env.PORTFOLIO_STATE.idFromName(userId);
+    const stub = env.PORTFOLIO_STATE.get(id);
+    const response = await stub.fetch(`http://internal/get?userId=${userId}`);
+    
+    if (!response.ok) {
+      return jsonResponse({ error: "User not found" }, 404);
+    }
+    
+    const portfolio = await response.json();
+    
+    if (!portfolio || portfolio === null) {
+      return jsonResponse({ error: "User not found" }, 404);
+    }
+    
+    return jsonResponse(portfolio);
+  } catch (error: any) {
+    console.error("Error getting portfolio:", error);
+    return jsonResponse({ error: error.message || "Internal server error" }, 500);
   }
-  
-  return jsonResponse(portfolio);
 }
 
 // Get user transactions
@@ -176,15 +193,16 @@ async function handleTrade(request: Request, env: Env): Promise<Response> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-    id: txId,
-    userid: tradeRequest.userid,
-    stock_symbol: tradeRequest.stock_symbol,
-    stock_name: tradeRequest.stock_symbol, // Could be enhanced with company name lookup
-    type: tradeRequest.type,
-    shares: tradeRequest.quantity,
-    price_per_share: currentPrice,
-    date: new Date().toISOString().split("T")[0],
-    initiator: tradeRequest.initiator || "user",
+      id: txId,
+      userid: tradeRequest.userid,
+      stock_symbol: tradeRequest.stock_symbol,
+      stock_name: tradeRequest.stock_symbol, // Could be enhanced with company name lookup
+      type: tradeRequest.type,
+      shares: tradeRequest.quantity,
+      price_per_share: currentPrice,
+      date: new Date().toISOString().split("T")[0],
+      initiator: tradeRequest.initiator || "user",
+    }),
   });
   
   return jsonResponse({
@@ -281,6 +299,35 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   console.log("Webhook event:", data.event, data.data?.call_id);
   
   return jsonResponse({ received: true });
+}
+
+// Migrate portfolio data from JSON
+async function handleMigrate(request: Request, env: Env): Promise<Response> {
+  try {
+    const { portfolios } = await request.json() as { portfolios: any[] };
+    let migrated = 0;
+    
+    for (const portfolio of portfolios) {
+      const id = env.PORTFOLIO_STATE.idFromName(portfolio.userid);
+      const stub = env.PORTFOLIO_STATE.get(id);
+      
+      await stub.fetch("http://internal/update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: portfolio.userid,
+          portfolio: portfolio,
+        }),
+      });
+      
+      migrated++;
+    }
+    
+    return jsonResponse({ success: true, migrated });
+  } catch (error: any) {
+    console.error("Migration error:", error);
+    return jsonResponse({ error: error.message || "Migration failed" }, 500);
+  }
 }
 
 // Handle WebSocket upgrade for voice interface

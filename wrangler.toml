@@ -2,6 +2,7 @@ name = "cf-ai-portfolio"
 main = "workers/src/index.ts"
 compatibility_date = "2024-01-01"
 compatibility_flags = ["nodejs_compat"]
+account_id = "b9da0597a602bf326c8e85d501726763"
 
 [durable_objects]
 bindings = [
