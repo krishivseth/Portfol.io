@@ -366,8 +366,32 @@ Get cached analysis result.
 
 ### WebSocket Endpoints
 
-#### `WS /llm-websocket/:callId`
-WebSocket connection for voice interface (Retell AI protocol).
+#### `WS /llm-websocket/:userId`
+Bidirectional channel that now powers both the voice interface and live portfolio streaming. Connect with your `userId`, then opt-in to real-time topics by sending:
+
+```json
+{ "type": "subscribe", "channels": ["portfolio", "alerts"] }
+```
+
+- **Live portfolio updates**: every successful `POST /api/analyze` for that `userId` pushes an `analysis_update` payload with the latest recommendation + technical package so dashboards update without polling.
+- **Alert system**: when the engine detects notable signals (e.g., `NVDA` price touching the 61.8% Fibonacci retracement), an `alert` event such as `"NVDA hit your 61.8% Fib level"` is broadcast on the `alerts` channel.
+
+Sample alert envelope:
+
+```
+{
+  "type": "alert",
+  "timestamp": 1731950000000,
+  "channels": ["alerts"],
+  "payload": {
+    "symbol": "NVDA",
+    "level": "61.8%",
+    "targetPrice": 132.48,
+    "currentPrice": 132.46,
+    "message": "NVDA hit your 61.8% Fib level (132.48)"
+  }
+}
+```
 
 ---
 

@@ -6,7 +6,13 @@ import { WebSocketConnection } from "./durable-objects/WebSocketConnection";
 import { StockAnalysisPipeline } from "./workflows/stockAnalysisPipeline";
 import { processVoiceQuery } from "./utils/llmClient";
 import { fetchStockQuote } from "./utils/stockData";
-import { ResponseRequiredRequest, ResponseResponse, TradeRequest, AnalyzeRequest } from "./types";
+import {
+  ResponseRequiredRequest,
+  ResponseResponse,
+  TradeRequest,
+  AnalyzeRequest,
+  StockAnalysisResult,
+} from "./types";
 
 // Export Durable Objects for Wrangler
 export { PortfolioState, TransactionLog, ConversationMemory, AnalysisCache, WebSocketConnection };
@@ -65,7 +71,7 @@ export default {
       }
       
       if (url.pathname === "/api/analyze" && request.method === "POST") {
-        return handleAnalyze(request, env);
+        return handleAnalyze(request, env, ctx);
       }
       
       if (url.pathname.startsWith("/api/analysis/") && request.method === "GET") {
@@ -213,7 +219,7 @@ async function handleTrade(request: Request, env: Env): Promise<Response> {
 }
 
 // Analyze stock (on-demand)
-async function handleAnalyze(request: Request, env: Env): Promise<Response> {
+async function handleAnalyze(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
   const analyzeRequest: AnalyzeRequest = await request.json();
   const { symbol, userId, useCache = true } = analyzeRequest;
   
@@ -269,7 +275,16 @@ async function handleAnalyze(request: Request, env: Env): Promise<Response> {
       result: workflowResult.result,
     }),
   });
-  
+
+  if (userId) {
+    const notifyPromise = sendLiveAnalysisEvents(userId, workflowResult.result, env);
+    if (ctx) {
+      ctx.waitUntil(notifyPromise);
+    } else {
+      await notifyPromise;
+    }
+  }
+
   return jsonResponse(workflowResult.result);
 }
 
@@ -327,6 +342,95 @@ async function handleMigrate(request: Request, env: Env): Promise<Response> {
   } catch (error: any) {
     console.error("Migration error:", error);
     return jsonResponse({ error: error.message || "Migration failed" }, 500);
+  }
+}
+
+interface BroadcastEnvelope {
+  eventType: string;
+  payload: any;
+  channels?: string[];
+}
+
+async function sendLiveAnalysisEvents(userId: string, result: StockAnalysisResult, env: Env): Promise<void> {
+  const envelopes: BroadcastEnvelope[] = [
+    {
+      eventType: "analysis_update",
+      channels: ["portfolio"],
+      payload: {
+        symbol: result.symbol,
+        recommendation: result.recommendation,
+        confidence: result.confidence,
+        reasoning: result.reasoning,
+        technicalAnalysis: result.technicalAnalysis,
+        timestamp: result.timestamp,
+      },
+    },
+  ];
+
+  const fibAlerts = buildFibAlerts(result);
+  if (fibAlerts.length > 0) {
+    envelopes.push({
+      eventType: "alert",
+      channels: ["alerts"],
+      payload: fibAlerts,
+    });
+  }
+
+  for (const envelope of envelopes) {
+    await broadcastToWebSocket(userId, envelope, env);
+  }
+}
+
+function buildFibAlerts(result: StockAnalysisResult): Array<{
+  symbol: string;
+  level: string;
+  targetPrice: number;
+  currentPrice: number;
+  deviationPct: number;
+  message: string;
+  timestamp: number;
+}> {
+  const alerts: Array<{
+    symbol: string;
+    level: string;
+    targetPrice: number;
+    currentPrice: number;
+    deviationPct: number;
+    message: string;
+    timestamp: number;
+  }> = [];
+
+  const fibLevel = result.technicalAnalysis.fibonacci.level61_8;
+  const currentPrice = result.technicalAnalysis.currentPrice;
+  const deviationPct = Math.abs(currentPrice - fibLevel) / fibLevel;
+
+  // Alert when price is within 0.25% of the 61.8% Fibonacci retracement level.
+  if (deviationPct <= 0.0025) {
+    alerts.push({
+      symbol: result.symbol.toUpperCase(),
+      level: "61.8%",
+      targetPrice: Number(fibLevel.toFixed(2)),
+      currentPrice: Number(currentPrice.toFixed(2)),
+      deviationPct: Number((deviationPct * 100).toFixed(3)),
+      message: `${result.symbol.toUpperCase()} hit your 61.8% Fib level (${fibLevel.toFixed(2)})`,
+      timestamp: Date.now(),
+    });
+  }
+
+  return alerts;
+}
+
+async function broadcastToWebSocket(userId: string, envelope: BroadcastEnvelope, env: Env): Promise<void> {
+  try {
+    const id = env.WS_CONNECTION.idFromName(userId);
+    const stub = env.WS_CONNECTION.get(id);
+    await stub.fetch("http://internal/broadcast", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(envelope),
+    });
+  } catch (error) {
+    console.warn(`Failed to broadcast ${envelope.eventType} to ${userId}:`, error);
   }
 }
 

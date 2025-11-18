@@ -1,39 +1,59 @@
 import { ResponseResponse, ConfigResponse, PingPongResponse, ResponseRequiredRequest } from "../types";
 
+interface BroadcastMessage {
+  eventType: string;
+  payload: any;
+  channels?: string[];
+}
+
 export class WebSocketConnection {
   private state: DurableObjectState;
   private env: any;
-  private ws: WebSocket | null = null;
-  private callId: string | null = null;
+  private connections: Set<WebSocket>;
+  private channelSubscriptions: Map<WebSocket, Set<string>>;
 
   constructor(state: DurableObjectState, env: any) {
     this.state = state;
     this.env = env;
+    this.connections = new Set();
+    this.channelSubscriptions = new Map();
   }
 
   async fetch(request: Request): Promise<Response> {
-    // Handle WebSocket upgrade
+    const url = new URL(request.url);
+
+    if (url.pathname === "/broadcast" && request.method === "POST") {
+      const message = await request.json() as BroadcastMessage;
+      const deliveries = this.broadcastStructuredEvent(message);
+      return new Response(JSON.stringify({ success: true, deliveries }), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
     const upgradeHeader = request.headers.get("Upgrade");
     if (upgradeHeader === "websocket") {
       const pair = new WebSocketPair();
       const [client, server] = Object.values(pair);
-      this.ws = server;
       this.acceptWebSocket(server);
       return new Response(null, {
         status: 101,
         webSocket: client,
       });
     }
+
     return new Response("Not a WebSocket request", { status: 400 });
   }
 
   private acceptWebSocket(ws: WebSocket): void {
     ws.accept();
+    this.connections.add(ws);
+    this.channelSubscriptions.set(ws, new Set());
     
     ws.addEventListener("message", async (event) => {
       try {
-        const data = JSON.parse(event.data as string);
-        await this.handleMessage(data);
+        const raw = typeof event.data === "string" ? event.data : "";
+        const data = raw ? JSON.parse(raw) : null;
+        await this.handleMessage(ws, data);
       } catch (error) {
         console.error("Error handling WebSocket message:", error);
         ws.close(1011, "Error processing message");
@@ -41,8 +61,8 @@ export class WebSocketConnection {
     });
 
     ws.addEventListener("close", () => {
-      this.ws = null;
-      this.callId = null;
+      this.connections.delete(ws);
+      this.channelSubscriptions.delete(ws);
     });
 
     // Send initial config
@@ -54,26 +74,49 @@ export class WebSocketConnection {
       },
       response_id: 1,
     };
-    this.send(JSON.stringify(config));
+    this.safeSend(ws, JSON.stringify(config));
   }
 
-  private async handleMessage(data: any): Promise<void> {
+  private async handleMessage(ws: WebSocket, data: any): Promise<void> {
+    if (!data) {
+      return;
+    }
+
+    if (data.type === "subscribe") {
+      const channels = Array.isArray(data.channels)
+        ? data.channels.map((channel: string) => channel.toLowerCase())
+        : [];
+      this.channelSubscriptions.set(ws, new Set(channels));
+      this.safeSend(ws, JSON.stringify({
+        type: "subscribed",
+        channels: Array.from(this.channelSubscriptions.get(ws) ?? []),
+        timestamp: Date.now(),
+      }));
+      return;
+    }
+
+    if (data.type === "ping") {
+      this.safeSend(ws, JSON.stringify({
+        type: "pong",
+        timestamp: Date.now(),
+      }));
+      return;
+    }
+
     if (data.interaction_type === "ping_pong") {
       const response: PingPongResponse = {
         response_type: "ping_pong",
         timestamp: data.timestamp,
       };
-      this.send(JSON.stringify(response));
+      this.broadcastRaw(JSON.stringify(response));
       return;
     }
 
     if (data.interaction_type === "call_details") {
-      // Store call details if needed
       return;
     }
 
     if (data.interaction_type === "update_only") {
-      // Just update transcript, no response needed
       return;
     }
 
@@ -87,16 +130,11 @@ export class WebSocketConnection {
         transcript: data.transcript || [],
       };
       
-      // Process with LLM (this would be handled by the main worker)
-      // For now, send a placeholder response
       await this.processResponseRequest(request);
     }
   }
 
   private async processResponseRequest(request: ResponseRequiredRequest): Promise<void> {
-    // This method will be called by the main worker after processing with LLM
-    // The actual LLM processing happens in the main worker
-    // Placeholder response for now
     const response: ResponseResponse = {
       response_type: "response",
       response_id: request.response_id,
@@ -108,21 +146,59 @@ export class WebSocketConnection {
   }
 
   sendResponse(response: ResponseResponse): void {
-    if (this.ws && this.ws.readyState === WebSocket.READY_STATE_OPEN) {
-      this.send(JSON.stringify(response));
+    this.broadcastRaw(JSON.stringify(response));
+  }
+
+  private broadcastStructuredEvent(message: BroadcastMessage): number {
+    const normalizedChannels = message.channels?.map((channel) => channel.toLowerCase());
+    const payload = JSON.stringify({
+      type: message.eventType,
+      timestamp: Date.now(),
+      channels: normalizedChannels,
+      payload: message.payload,
+    });
+
+    let deliveries = 0;
+    for (const socket of this.connections) {
+      if (socket.readyState !== WebSocket.OPEN) {
+        continue;
+      }
+      if (this.shouldDeliver(socket, normalizedChannels)) {
+        socket.send(payload);
+        deliveries++;
+      }
+    }
+    return deliveries;
+  }
+
+  private shouldDeliver(ws: WebSocket, channels?: string[]): boolean {
+    if (!channels || channels.length === 0) {
+      return true;
+    }
+    const subscriptions = this.channelSubscriptions.get(ws);
+    if (!subscriptions || subscriptions.size === 0) {
+      return false;
+    }
+    return channels.some((channel) => subscriptions.has(channel));
+  }
+
+  private broadcastRaw(payload: string): void {
+    for (const socket of this.connections) {
+      this.safeSend(socket, payload);
     }
   }
 
-  private send(data: string): void {
-    if (this.ws && this.ws.readyState === WebSocket.READY_STATE_OPEN) {
-      this.ws.send(data);
+  private safeSend(ws: WebSocket, payload: string): void {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(payload);
     }
   }
 
   close(): void {
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
+    for (const socket of this.connections) {
+      socket.close();
     }
+    this.connections.clear();
+    this.channelSubscriptions.clear();
   }
 }
