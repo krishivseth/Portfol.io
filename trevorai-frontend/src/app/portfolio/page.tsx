@@ -30,10 +30,15 @@ export default function PortfolioPage() {
 
   const fetchPortfolioData = async () => {
     setLoading(true);
-    const res = await fetch(`http://127.0.0.1:8081/api/portfolio/${selectedUser.userid}`);
-    const data = await res.json();
-    setUserData(data);
-    setLoading(false);
+    try {
+      const { getPortfolio } = await import("@/lib/api");
+      const data = await getPortfolio(selectedUser.userid);
+      setUserData(data);
+    } catch (error) {
+      console.error("Error fetching portfolio:", error);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const fetchStockPrices = async (symbols: string[]) => {

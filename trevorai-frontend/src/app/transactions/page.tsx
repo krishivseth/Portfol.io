@@ -24,10 +24,15 @@ export default function TransactionsPage() {
   useEffect(() => {
     async function fetchTransactions() {
       setLoading(true);
-      const res = await fetch(`http://127.0.0.1:8081/api/transactions/${selectedUser.userid}`);
-      const data = await res.json();
-      setTransactions(data);
-      setLoading(false);
+      try {
+        const { getTransactions } = await import("@/lib/api");
+        const data = await getTransactions(selectedUser.userid);
+        setTransactions(data);
+      } catch (error) {
+        console.error("Error fetching transactions:", error);
+      } finally {
+        setLoading(false);
+      }
     }
     fetchTransactions();
   }, [selectedUser]); // 🛠️ refetch whenever selectedUser changes

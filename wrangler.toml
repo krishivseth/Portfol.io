@@ -1,0 +1,27 @@
+name = "cf-ai-portfolio"
+main = "workers/src/index.ts"
+compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[durable_objects]
+bindings = [
+  { name = "PORTFOLIO_STATE", class_name = "PortfolioState", script_name = "cf-ai-portfolio" },
+  { name = "TRANSACTION_LOG", class_name = "TransactionLog", script_name = "cf-ai-portfolio" },
+  { name = "CONVERSATION_MEMORY", class_name = "ConversationMemory", script_name = "cf-ai-portfolio" },
+  { name = "ANALYSIS_CACHE", class_name = "AnalysisCache", script_name = "cf-ai-portfolio" },
+  { name = "WS_CONNECTION", class_name = "WebSocketConnection", script_name = "cf-ai-portfolio" }
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["PortfolioState", "TransactionLog", "ConversationMemory", "AnalysisCache", "WebSocketConnection"]
+
+[ai]
+binding = "AI"
+
+[vars]
+# These should be set via wrangler secret put in production
+# FINNHUB_API_KEY = ""
+# ALPHAVANTAGE_API_KEY = ""
+# RETELL_API_KEY = ""
+
